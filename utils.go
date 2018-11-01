@@ -14,6 +14,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	jira "github.com/andygrunwald/go-jira"
 )
 
 //Task - this struct is used to cover Governor's tasks structure
@@ -50,6 +52,35 @@ var tokenExpiration time.Time
 //action - what action should be in tasks.
 //url - URL where list of tickets is available
 func GetTickets(status string, action string) *[]Task {
+	ticketsTemp := getAllTickets()
+	var tickets []Task
+	for _, t := range *ticketsTemp {
+		if t.State == status && t.Action == action {
+			tickets = append(tickets, t)
+		}
+	}
+	if tickets != nil {
+		fmt.Println("Results All: ", tickets)
+	}
+	return &tickets
+}
+
+//GetJiraTickets returns all done tickets with source jira
+func GetJiraTickets() *[]Task {
+	ticketsTemp := getAllTickets()
+	var tickets []Task
+	for _, t := range *ticketsTemp {
+		if t.State == "done" && t.Source == "jira" {
+			tickets = append(tickets, t)
+		}
+	}
+	if tickets != nil {
+		fmt.Println("Results All: ", tickets)
+	}
+	return &tickets
+}
+
+func getAllTickets() *[]Task {
 
 	bearer := auth()
 	req, _ := http.NewRequest("GET", URLUsers, nil)
@@ -69,17 +100,7 @@ func GetTickets(status string, action string) *[]Task {
 	if err != nil {
 		println("Error:", err)
 	}
-
-	var tickets []Task
-	for _, t := range ticketsTemp {
-		if t.State == status && t.Action == action {
-			tickets = append(tickets, t)
-		}
-	}
-	if tickets != nil {
-		fmt.Println("Results All: ", tickets)
-	}
-	return &tickets
+	return &ticketsTemp
 }
 
 func auth() string {
@@ -188,6 +209,48 @@ func AddUser(ticket *Task) {
 		println("User added to Domain Admins group")
 		fmt.Println("Done")
 	}
+}
+
+//ChangeJiraStatus - changes status in Jira to Done and in Governor to Closed
+func ChangeJiraStatus(ticket *Task) {
+
+	jiraURL := "http://jira.verf.io:8080"
+	jiraUsername := "brian"
+	jiraPassword := "P@ssw0rd"
+
+	tp := jira.BasicAuthTransport{
+		Username: strings.TrimSpace(jiraUsername),
+		Password: strings.TrimSpace(jiraPassword),
+	}
+
+	client, err := jira.NewClient(tp.Client(), strings.TrimSpace(jiraURL))
+	if err != nil {
+		fmt.Printf("\nerror with Jira connection: %v\n", err)
+		return
+	}
+
+	clientIssue := client.Issue
+
+	issue, _, err := clientIssue.Get(ticket.SourceID, nil)
+	fmt.Println("Update status in Jira to \"DONE\" for Issue:", issue.ID)
+	//    11 - from TO DO to IN PROGRESS
+	//    21 - from TO DO to DONE
+
+	//    31 - from IN PROGRESS to TO DO
+	//    41 - from IN PROGRESS to DONE
+
+	//    51 - from DONE to TO DO
+	//    61 - from DONE to IN PROGRESS
+	//update status to "DONE"
+	_, err = clientIssue.DoTransition(issue.ID, "21")
+	if err != nil {
+		fmt.Printf("\nerror: %v\n", err)
+		return
+	}
+
+	changeStatus(ticket, "Closed")
+	issue, _, err = clientIssue.Get(ticket.SourceID, nil)
+	fmt.Println("Status of Issue", issue.ID, "was successfully updated to:", issue.Fields.Status.Name)
 }
 
 func run(cmd *exec.Cmd, ticket *Task) error {
