@@ -37,6 +37,8 @@ type Token struct {
 var URLUsers = "http://governor.verf.io/api/users/"
 
 var myClient = &http.Client{Timeout: 10 * time.Second}
+var currentToken Token
+var tokenExpiration time.Time
 
 //GetTickets - returns the list of tickets into []Task.
 //
@@ -71,14 +73,19 @@ func GetTickets(status string, action string) *[]Task {
 			tickets = append(tickets, t)
 		}
 	}
-
-	fmt.Println("Results All: ", tickets)
-
+	if tickets != nil {
+		fmt.Println("Results All: ", tickets)
+	}
 	return &tickets
 }
 
 func auth() string {
 
+	if currentToken.AccessToken != "" && tokenExpiration.After(time.Now()) {
+		return currentToken.TokenType + " " + currentToken.AccessToken
+	}
+
+	fmt.Println("New token will be generated")
 	payload := strings.NewReader("{\"grant_type\":\"client_credentials\",\"client_id\": \"lIJmNudGywMs2JPzhayxCvTvnxb2YnRO\",\"client_secret\": \"IvqFrrtetMVRnj_zahi7nvBkgjolFM5xzTCPVbDyoFW8YmmqLUMB-vw2dHyyy-oG\",\"audience\": \"https://governor.verf.io/api\"}")
 	url := "https://verfio.auth0.com/oauth/token"
 
@@ -86,24 +93,24 @@ func auth() string {
 	if err != nil {
 		log.Printf("Error creating POST request: %s", err)
 	}
-
 	req.Header.Add("content-type", "application/json")
 
+	tokenExpiration = time.Now()
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		log.Printf("Error sending POST request: %s", err)
 	}
 	defer resp.Body.Close()
 
-	var t Token
 	buf := new(bytes.Buffer)
 	buf.ReadFrom(resp.Body)
 	respByte := buf.Bytes()
-	err = json.Unmarshal(respByte, &t)
+	err = json.Unmarshal(respByte, &currentToken)
 
-	bearer := t.TokenType + " " + t.AccessToken
+	tokenExpiration = tokenExpiration.Add(time.Duration(currentToken.ExpiresIn-60) * time.Second)
+	fmt.Println("Token will expire at: ", tokenExpiration)
 
-	return bearer
+	return currentToken.TokenType + " " + currentToken.AccessToken
 }
 
 //DisableUser - this function disables user provided in Task
@@ -111,19 +118,7 @@ func DisableUser(ticket *Task) {
 
 	println("Login: ", ticket.User)
 	command := exec.Command("PowerShell", "-Command", "Disable-ADAccount", "-Identity "+ticket.User)
-	run(command, ticket)
-}
-
-func run(cmd *exec.Cmd, ticket *Task) {
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-
-	err := cmd.Start()
-	if err != nil {
-		log.Fatal(err)
-	}
-	err = cmd.Wait()
+	err := run(command, ticket)
 	if err != nil {
 		println("Error")
 		changeStatus(ticket, "error")
@@ -137,8 +132,24 @@ func run(cmd *exec.Cmd, ticket *Task) {
 	}
 }
 
+func run(cmd *exec.Cmd, ticket *Task) error {
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+
+	err := cmd.Start()
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = cmd.Wait()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func changeStatus(ticket *Task, state string) {
-	println("changeStatus :", state)
+	println("changeStatus: ", state)
 	ticket.State = state
 
 	var urlUser = URLUsers + ticket.ID
@@ -154,7 +165,6 @@ func changeStatus(ticket *Task, state string) {
 	req.Header.Add("authorization", bearer)
 	req.Header.Add("contentType", "application/json")
 	resp, err := myClient.Do(req)
-	//resp, err := myClient.Post(urlUser, "application/json", t)
 	if err != nil {
 		fmt.Println("Error with POST request")
 	}
