@@ -2,8 +2,10 @@ package utils
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -36,6 +38,7 @@ type Token struct {
 //URLUsers - URL to the list of users
 var URLUsers = "http://governor.verf.io/api/users/"
 
+var stdChars = []byte("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
 var myClient = &http.Client{Timeout: 10 * time.Second}
 var currentToken Token
 var tokenExpiration time.Time
@@ -132,6 +135,61 @@ func DisableUser(ticket *Task) {
 	}
 }
 
+//ResetPassword - reset password for provided user
+func ResetPassword(ticket *Task) {
+
+	println("Login: ", ticket.User)
+	password := newPassword(20)
+	println("Password :", password)
+	command := exec.Command("PowerShell", "-Command", "Set-ADAccountPassword", "-Identity "+ticket.User, "-Reset", "-NewPassword (ConvertTo-SecureString -AsPlainText "+password+" -Force)")
+	err := run(command, ticket)
+	if err != nil {
+		println("Error")
+		changeStatus(ticket, "error")
+		send(err.Error(), "Error detected "+"For support", "governorandclerk@gmail.com")
+		//log.Fatal(err)
+	} else {
+		send("Password has been reset\n"+"New password is :"+password+"\n Verify your connection: RDP 35.231.245.199", "Reset password for account "+ticket.User, ticket.Email)
+		changeStatus(ticket, "done")
+		println("Action: password has been reset")
+		fmt.Println("Done")
+	}
+}
+
+//AddUser - creates new user and adds it to Domain Admins(really?)
+func AddUser(ticket *Task) {
+
+	println("Login: ", ticket.User)
+	// cmd := exec.Command("PowerShell", "-Command", "Get-ADUser", "-LDAPFilter \"(SAMAccountName="+Ticket.User+")\"", "| select DistinguishedName ", "| ft -hide")
+	// out, _ := cmd.CombinedOutput()
+
+	// println("Output is : ", "\""+string(out)+"\"")
+
+	password := newPassword(20)
+	println("Password :", password)
+	command := exec.Command("PowerShell", "-Command", "New-ADUser", "-Name "+ticket.User, "-UserPrincipalName "+ticket.User, "-ChangePasswordAtLogon $false", "-AccountPassword (ConvertTo-SecureString -AsPlainText "+password+" -Force) ", "-Enabled $true ")
+	err := run(command, ticket)
+	if err != nil {
+		println("Error")
+		changeStatus(ticket, "error")
+		send(err.Error(), "Error detected "+"For support", "governorandclerk@gmail.com")
+		//log.Fatal(err)
+	} else {
+		send("User has been created\n"+"Password is :"+password+"\n Verify your connection: RDP 35.231.245.199", "Account name is  "+ticket.User, ticket.Email)
+		changeStatus(ticket, "done")
+		println("User created")
+		fmt.Println("Done")
+	}
+	command = exec.Command("PowerShell", "-Command", "Add-ADGroupMember", "-Identity \"Domain Admins\"", "-Members "+ticket.User)
+	err = run(command, ticket)
+	if err != nil {
+		fmt.Println("Error with adding user", ticket.User, "to the Domain Admins group")
+	} else {
+		println("User added to Domain Admins group")
+		fmt.Println("Done")
+	}
+}
+
 func run(cmd *exec.Cmd, ticket *Task) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -204,4 +262,31 @@ func readFile(filename string) string {
 	pass := string(bs)
 
 	return pass
+}
+
+func newPassword(length int) string {
+	return randChar(length, stdChars)
+}
+
+func randChar(length int, chars []byte) string {
+	newPword := make([]byte, length)
+	randomData := make([]byte, length+(length/4)) // storage for random bytes.
+	clen := byte(len(chars))
+	maxrb := byte(256 - (256 % len(chars)))
+	i := 0
+	for {
+		if _, err := io.ReadFull(rand.Reader, randomData); err != nil {
+			panic(err)
+		}
+		for _, c := range randomData {
+			if c >= maxrb {
+				continue
+			}
+			newPword[i] = chars[c%clen]
+			i++
+			if i == length {
+				return string(newPword)
+			}
+		}
+	}
 }
